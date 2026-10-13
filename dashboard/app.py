@@ -52,7 +52,7 @@ THEMES = {
     },
 }
 
-st.set_page_config(page_title="Combustíveis vs. Macro", page_icon="⛽", layout="wide")
+st.set_page_config(page_title="Combustíveis vs. Macro", layout="wide")
 
 
 def sql_literal(value: str) -> str:

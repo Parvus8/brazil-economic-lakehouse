@@ -1,0 +1,6 @@
+# Cluster local de um nó. Os serviços são acessados com `kubectl port-forward`, então nenhuma porta do host é aberta.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: lakehouse
+nodes:
+  - role: control-plane

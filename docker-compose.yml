@@ -1,0 +1,192 @@
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: docker/airflow/Dockerfile
+    target: compose
+  image: brazil-economic-lakehouse/airflow:latest
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "false"
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: admin:admin
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /opt/airflow/config/simple_auth_manager_passwords.json.generated
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres/airflow
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?set AIRFLOW_JWT_SECRET in .env}
+    AIRFLOW__API__SECRET_KEY: ${AIRFLOW_API_SECRET_KEY:?set AIRFLOW_API_SECRET_KEY in .env}
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    PYTHONPATH: /opt/airflow/src
+    S3_ENDPOINT_URL: http://seaweedfs:8333
+    S3_ACCESS_KEY: ${S3_PIPELINE_ACCESS_KEY:?set S3_PIPELINE_ACCESS_KEY in .env}
+    S3_SECRET_KEY: ${S3_PIPELINE_SECRET_KEY:?set S3_PIPELINE_SECRET_KEY in .env}
+    ANP_MAX_DOWNLOAD_MB: ${ANP_MAX_DOWNLOAD_MB:-1024}
+    DUCKDB_S3_ENDPOINT: seaweedfs:8333
+    DUCKDB_PATH: /opt/airflow/warehouse/warehouse.duckdb
+    PIPELINE_START_YEAR: ${PIPELINE_START_YEAR:-2018}
+    DBT_SEND_ANONYMOUS_USAGE_STATS: "false"
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./src:/opt/airflow/src
+    - ./dbt_project:/opt/airflow/dbt
+    - ./warehouse:/opt/airflow/warehouse
+    - ./logs:/opt/airflow/logs
+    - ./config:/opt/airflow/config
+    - ./plugins:/opt/airflow/plugins
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on: &airflow-common-depends-on
+    postgres:
+      condition: service_healthy
+    seaweedfs-init:
+      condition: service_completed_successfully
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # Object storage compatível com S3 para o lake. Só a API S3 é publicada (em localhost); as portas de
+  # master, volume e filer ficam dentro da rede do Docker porque não têm autenticação.
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.48
+    hostname: seaweedfs
+    user: "1000:1000"
+    entrypoint: ["/bin/sh", "/scripts/entrypoint.sh"]
+    environment:
+      S3_ADMIN_ACCESS_KEY: ${S3_ADMIN_ACCESS_KEY:?set S3_ADMIN_ACCESS_KEY in .env}
+      S3_ADMIN_SECRET_KEY: ${S3_ADMIN_SECRET_KEY:?set S3_ADMIN_SECRET_KEY in .env}
+      S3_PIPELINE_ACCESS_KEY: ${S3_PIPELINE_ACCESS_KEY:?set S3_PIPELINE_ACCESS_KEY in .env}
+      S3_PIPELINE_SECRET_KEY: ${S3_PIPELINE_SECRET_KEY:?set S3_PIPELINE_SECRET_KEY in .env}
+      S3_DASHBOARD_ACCESS_KEY: ${S3_DASHBOARD_ACCESS_KEY:?set S3_DASHBOARD_ACCESS_KEY in .env}
+      S3_DASHBOARD_SECRET_KEY: ${S3_DASHBOARD_SECRET_KEY:?set S3_DASHBOARD_SECRET_KEY in .env}
+    ports:
+      - "127.0.0.1:8333:8333"
+    volumes:
+      - seaweedfs-data:/data
+      - ./docker/seaweedfs:/scripts:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8333/healthz"]
+      interval: 10s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  seaweedfs-init:
+    image: chrislusf/seaweedfs:4.48
+    user: "1000:1000"
+    entrypoint: ["/bin/sh", "/scripts/create-buckets.sh"]
+    volumes:
+      - ./docker/seaweedfs:/scripts:ro
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+    restart: "no"
+
+  # Consumidor somente leitura da camada gold (sua identidade S3 só consegue ler o bucket gold).
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: ../docker/dashboard/Dockerfile
+    image: brazil-economic-lakehouse/dashboard:latest
+    environment:
+      S3_ENDPOINT: seaweedfs:8333
+      S3_ACCESS_KEY: ${S3_DASHBOARD_ACCESS_KEY:?set S3_DASHBOARD_ACCESS_KEY in .env}
+      S3_SECRET_KEY: ${S3_DASHBOARD_SECRET_KEY:?set S3_DASHBOARD_SECRET_KEY in .env}
+    ports:
+      - "127.0.0.1:${DASHBOARD_PORT:-8501}:8501"
+    depends_on:
+      seaweedfs-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        mkdir -p /opt/airflow/logs /opt/airflow/warehouse /opt/airflow/config
+        chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/logs /opt/airflow/warehouse /opt/airflow/dbt /opt/airflow/config
+        chmod 700 /opt/airflow/config
+        exec /entrypoint airflow pools set spark 1 "Local Spark jobs run one at a time to bound memory"
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: "true"
+    user: "0:0"
+
+  airflow-apiserver:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "127.0.0.1:${AIRFLOW_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/version"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-triggerer:
+    <<: *airflow-common
+    command: triggerer
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+volumes:
+  postgres-data:
+  seaweedfs-data:

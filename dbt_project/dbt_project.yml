@@ -1,0 +1,21 @@
+name: brazil_economic_lakehouse
+version: "1.0.0"
+profile: lakehouse
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+clean-targets: ["target", "dbt_packages", "logs"]
+
+models:
+  brazil_economic_lakehouse:
+    +materialized: table
+    staging:
+      +schema: staging
+    intermediate:
+      +schema: intermediate
+    marts:
+      +schema: marts
+      # Os marts são exportados como Parquet para o bucket gold (external_root no profile), então consumidores
+      # como o painel leem o object storage em vez do arquivo do DuckDB, e o próprio dbt fica sem estado.
+      +materialized: external

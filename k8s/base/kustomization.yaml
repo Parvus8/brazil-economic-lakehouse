@@ -1,0 +1,11 @@
+# Serviços de plataforma do lakehouse. Os Secrets ficam de fora de propósito: o `make k8s-secrets` cria os
+# Secrets a partir do .env local, então nenhuma credencial é commitada. O Airflow em si é instalado com o
+# Helm chart oficial (k8s/airflow-values.yaml).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: lakehouse
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - seaweedfs.yaml
+  - dashboard.yaml

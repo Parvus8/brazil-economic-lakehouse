@@ -1,0 +1,16 @@
+version: 2
+
+sources:
+  - name: silver
+    description: Tabelas Iceberg gravadas pelos jobs Spark bronze -> silver (catálogo Hadoop no SeaweedFS).
+    tables:
+      - name: bcb_series
+        description: Séries temporais diárias e mensais do Banco Central do Brasil (API SGS).
+        config:
+          meta:
+            external_location: "iceberg_scan('{{ env_var('ICEBERG_WAREHOUSE_URI', 's3://silver/warehouse') }}/bcb/series')"
+      - name: anp_fuel_prices
+        description: Preços de combustíveis coletados pela ANP em postos de todo o Brasil.
+        config:
+          meta:
+            external_location: "iceberg_scan('{{ env_var('ICEBERG_WAREHOUSE_URI', 's3://silver/warehouse') }}/anp/fuel_prices')"

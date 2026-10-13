@@ -1,0 +1,27 @@
+version: 2
+
+models:
+  - name: fct_fuel_prices_monthly
+    description: Estatísticas mensais de preço de combustível por estado e produto.
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [month, state, product, unit]
+    columns:
+      - name: avg_price
+        data_tests:
+          - not_null
+
+  - name: mart_fuel_vs_macro
+    description: Preços nacionais mensais de combustíveis comparados com a inflação (IPCA), o dólar e a Selic, com base 100 no primeiro mês.
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [month, product]
+    columns:
+      - name: fuel_price_index
+        data_tests:
+          - not_null
+      - name: ipca_index
+        data_tests:
+          - not_null

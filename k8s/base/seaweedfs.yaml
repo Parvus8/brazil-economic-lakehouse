@@ -1,0 +1,133 @@
+# Object storage compatível com S3 (um único pod: master + volume + filer + gateway S3).
+# Os scripts vêm do ConfigMap seaweedfs-scripts, criado a partir de docker/seaweedfs pelo `make k8s-secrets`.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: seaweedfs-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seaweedfs
+  labels:
+    app: seaweedfs
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: seaweedfs
+  template:
+    metadata:
+      labels:
+        app: seaweedfs
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: seaweedfs
+          image: chrislusf/seaweedfs:4.48
+          command: ["/bin/sh", "/scripts/entrypoint.sh"]
+          envFrom:
+            - secretRef:
+                name: lakehouse-s3
+          env:
+            - name: SEAWEEDFS_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          ports:
+            - {name: s3, containerPort: 8333}
+            - {name: master, containerPort: 9333}
+            - {name: master-grpc, containerPort: 19333}
+            - {name: volume, containerPort: 8080}
+            - {name: volume-grpc, containerPort: 18080}
+            - {name: filer, containerPort: 8888}
+            - {name: filer-grpc, containerPort: 18888}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8333
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: seaweedfs-data
+        - name: scripts
+          configMap:
+            name: seaweedfs-scripts
+---
+# Os clientes só precisam da porta S3 e do master (para o job dos buckets); as outras portas não têm
+# autenticação e só são acessadas de pod para pod, pelo IP do pod.
+apiVersion: v1
+kind: Service
+metadata:
+  name: seaweedfs
+spec:
+  selector:
+    app: seaweedfs
+  ports:
+    - {name: s3, port: 8333}
+    - {name: master, port: 9333}
+    - {name: master-grpc, port: 19333}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seaweedfs-create-buckets
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: create-buckets
+          image: chrislusf/seaweedfs:4.48
+          command: ["/bin/sh", "/scripts/create-buckets.sh"]
+          env:
+            - name: BUCKETS
+              value: bronze silver gold airflow-logs
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: scripts
+          configMap:
+            name: seaweedfs-scripts

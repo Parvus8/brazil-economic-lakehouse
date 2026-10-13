@@ -1,0 +1,27 @@
+# Segredos e estado local nunca entram numa imagem.
+.env
+.env.*
+!.env.example
+config/
+logs/
+warehouse/
+plugins/
+
+.git/
+.github/
+.venv/
+venv/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.ruff_cache/
+
+dbt_project/target/
+dbt_project/logs/
+dbt_project/dbt_packages/
+dbt_project/.user.yml
+
+docs/
+k8s/
+dashboard/
+tests/

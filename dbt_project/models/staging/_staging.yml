@@ -1,0 +1,43 @@
+version: 2
+
+models:
+  - name: stg_bcb__series
+    description: Uma linha por série e data de referência.
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [series_name, reference_date]
+    columns:
+      - name: series_name
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [selic_target, ipca_monthly, usd_brl]
+      - name: reference_date
+        data_tests:
+          - not_null
+      - name: value
+        data_tests:
+          - not_null
+
+  - name: stg_anp__fuel_prices
+    description: Uma linha por coleta de preço feita pela ANP.
+    columns:
+      - name: collected_at
+        data_tests:
+          - not_null
+      - name: state
+        data_tests:
+          - not_null
+      - name: product
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [GASOLINA, GASOLINA ADITIVADA, ETANOL, DIESEL, DIESEL S10, GNV]
+              config:
+                severity: warn
+      - name: sale_price
+        data_tests:
+          - not_null
